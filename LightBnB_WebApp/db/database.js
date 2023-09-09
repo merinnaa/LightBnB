@@ -2,22 +2,46 @@ const properties = require("./json/properties.json");
 const users = require("./json/users.json");
 
 /// Users
+const { Pool } = require('pg');
 
+const pool = new Pool({
+  user: 'vagrant',
+  password: '123',
+  host: 'localhost',
+  database: 'lightbnb'
+});
+pool.query(`SELECT title FROM properties LIMIT 10;`)
+  .then(response => {
+    //console.log(response);
+  });
 /**
  * Get a single user from the database given their email.
  * @param {String} email The email of the user.
  * @return {Promise<{}>} A promise to the user.
  */
 const getUserWithEmail = function (email) {
-  let resolvedUser = null;
-  for (const userId in users) {
-    const user = users[userId];
-    if (user && user.email.toLowerCase() === email.toLowerCase()) {
-      resolvedUser = user;
-    }
-  }
-  return Promise.resolve(resolvedUser);
+  // let resolvedUser = null;
+  // for (const userId in users) {
+  //   const user = users[userId];
+  //   if (user && user.email.toLowerCase() === email.toLowerCase()) {
+  //     resolvedUser = user;
+  //   }
+
+  return pool.query(
+    `SELECT * FROM users
+      WHERE email = $1;`, [email])
+    .then((result) => {
+
+      if (result.rows.length > 0) {
+        return result.rows[0];
+      }
+    })
+    .catch((err) => {
+      console.log(err.message);
+    });
 };
+//return Promise.resolve(resolvedUser);
+
 
 /**
  * Get a single user from the database given their id.
@@ -25,6 +49,18 @@ const getUserWithEmail = function (email) {
  * @return {Promise<{}>} A promise to the user.
  */
 const getUserWithId = function (id) {
+  //const promise = new Promise();
+  
+  pool.query(
+    `SELECT * FROM users
+    WHERE id = $1;`, [id])
+    .then((result) => {
+      console.log(result.rows[0]);
+      return result.rows[0];
+    })
+    .catch((err) => {
+      console.log(err.message);
+    });
   return Promise.resolve(users[id]);
 };
 
@@ -37,6 +73,18 @@ const addUser = function (user) {
   const userId = Object.keys(users).length + 1;
   user.id = userId;
   users[userId] = user;
+
+  pool.query(
+    `INSERT INTO users('name', 'email', 'password')
+    VALUE($1, $2, $3)
+    RETURNING *`, [user])
+    .then((result) => {
+      //console.log(result.rows);
+      return result.rows;
+    })
+    .catch((err) => {
+      console.log(err.message);
+    });
   return Promise.resolve(user);
 };
 
@@ -47,8 +95,23 @@ const addUser = function (user) {
  * @param {string} guest_id The id of the user.
  * @return {Promise<[{}]>} A promise to the reservations.
  */
-const getAllReservations = function (guest_id, limit = 10) {
-  return getAllProperties(null, 2);
+const getAllReservations = function (guestId, limit = 10) {
+  
+  return pool.query(`SELECT reservations.id AS id, properties.title AS title, properties.cost_per_night AS cost_per_night, reservations.start_date AS start_date, AVG(property_reviews.rating) AS average_rating
+  FROM  reservations
+  JOIN properties ON reservations.property_id = properties.id
+  JOIN property_reviews ON properties.id = property_reviews.property_id
+  WHERE reservations.guest_id = $1
+  GROUP BY reservations.id, properties.id
+  ORDER BY reservations.start_date
+  LIMIT $2;`,[guestId,limit])
+    .then((result) => {
+      return result.rows;
+    })
+    .catch((err) => {
+      console.log(err.message);
+    });
+  // return Promise.resolve(guest_id);
 };
 
 /// Properties
@@ -60,11 +123,35 @@ const getAllReservations = function (guest_id, limit = 10) {
  * @return {Promise<[{}]>}  A promise to the properties.
  */
 const getAllProperties = function (options, limit = 10) {
-  const limitedProperties = {};
-  for (let i = 1; i <= limit; i++) {
-    limitedProperties[i] = properties[i];
+  // 1
+  const queryParams = [];
+  // 2
+  let queryString = `
+  SELECT properties.*, avg(property_reviews.rating) as average_rating
+  FROM properties
+  JOIN property_reviews ON properties.id = property_id
+  `;
+
+  // 3
+  if (options.city) {
+    queryParams.push(`%${options.city}%`);
+    queryString += `WHERE city LIKE $${queryParams.length} `;
   }
-  return Promise.resolve(limitedProperties);
+
+  // 4
+  queryParams.push(limit);
+  queryString += `
+  GROUP BY properties.id
+  ORDER BY cost_per_night
+  LIMIT $${queryParams.length};
+  `;
+
+  // 5
+  console.log(queryString, queryParams);
+
+  // 6
+  return pool.query(queryString, queryParams).then((res) => res.rows);
+
 };
 
 /**
